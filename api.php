@@ -1,8 +1,11 @@
 <?php
 header("Content-Type: application/json");
 
-$remoteBase = "http://138.68.24.136:3000/api/v1";
+// BASES
+$remoteBaseGeneral = "https://valentin.jbcomputers.com.gt/api/v1";
+$remoteBaseMachine = "https://valentin.jbcomputers.com.gt/machine/monkeychef/api/v1";
 
+// VALIDAR
 if (!isset($_GET['endpoint'])) {
     echo json_encode(["error" => "No endpoint"]);
     exit;
@@ -10,16 +13,25 @@ if (!isset($_GET['endpoint'])) {
 
 $endpoint = trim($_GET['endpoint'], "/");
 
-$url = "$remoteBase/$endpoint";
+// ---- ENDPOINTS DE MAQUINA ----
+if ($endpoint === "stockmachine") {
+    $idMachine = $_GET["idMachine"] ?? "";
+    $url = "$remoteBaseMachine/stockmachine/getStockMachine?idMachine=" . urlencode($idMachine);
+}
+else if ($endpoint === "findmachines") {
+    $url = "$remoteBaseMachine/machine/findAll";
+}
+// ---- ENDPOINT NORMAL ----
+else {
+    $url = "$remoteBaseGeneral/$endpoint";
+}
 
+// PETICIÓN
 $resp = @file_get_contents($url);
 
 if ($resp === false) {
     http_response_code(502);
-    echo json_encode([
-        "error" => "Bad Gateway: no se pudo conectar a la API remota",
-        "url" => $url
-    ]);
+    echo json_encode(["error" => "Bad Gateway", "url" => $url]);
     exit;
 }
 
