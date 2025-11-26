@@ -1,22 +1,18 @@
-// script.js - Reescritura completa manteniendo todas las funcionalidades originales
-// + machine.init, carga desde stockmachine (vía proxy.php para evitar CORS), corrección de URLs,
-// + control de stock por máquina, decremento al confirmar pago, modales, popup, etc.
-
 document.addEventListener("DOMContentLoaded", () => {
 
   // ---------- Estado principal ----------
-  let carrito = []; // items: { id, nombre, precio, imagen, cantidad, productoCompleto }
+  let carrito = [];
   let total = 0;
-  let productosAPI = [];    // lista de productos que se muestran (provenientes de stockmachine)
-  let categoriasAPI = [];   // categorías derivadas del stock (name + image)
+  let productosAPI = [];
+  let categoriasAPI = [];
   let categoriaActiva = "todos";
-  let mapaCategoriasId = {}; // si hay ids, no siempre existen en stockmachine
-  let stockByProduct = {}; // cache productId -> stock
+  let mapaCategoriasId = {};
+  let stockByProduct = {};
   let MACHINE_ID = null;
 
   // ---------- Config / rutas ----------
-  const API_PROXY = "api.php?endpoint="; // tu proxy para la API general (usa si lo necesitas)
-  const PROXY_PHP = "proxy.php?url=";    // proxy para imágenes / recursos (MISMO ORIGEN, evita CORS)
+  const API_PROXY = "api.php?endpoint=";
+  const PROXY_PHP = "proxy.php?url=";
   const STOCK_API_BASE = "https://valentin.jbcomputers.com.gt/machine/monkeychef/api/v1/stockmachine";
 
   // ---------- Elementos UI ----------
@@ -87,10 +83,10 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error("HTTP " + res.status);
       }
       const txt = await res.text();
-      // formato esperado: id=1  (o simplemente "1")
+
       const linea = txt.trim();
       if (!linea) return null;
-      // aceptar ambos formatos: "id=1" o "1"
+
       if (linea.includes("=")) {
         const partes = linea.split("=");
         const id = parseInt(partes[1].trim());
@@ -106,47 +102,35 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Helpers de URLs de imagen (corrige URLs mal formadas) ----------
-  // Muchas respuestas contienen URLs como "...amazonaws.comproductos/..." sin la barra entre dominio y path.
   function fixImageUrl(raw) {
     if (!raw || typeof raw !== "string") return "";
     let url = raw.trim();
 
-    // Si viene ya con espacio o query mal encodificada, limpiamos
     url = url.replace(/\s+/g, '');
 
-    // Si no tiene esquema, intentar agregar https:// si parece venir de amazonaws o de vending-app-products
     if (!/^https?:\/\//i.test(url)) {
-      // si comienza con vending-app..., asumir https://
       if (/vending-app-products\.s3\.us-east-2\.amazonaws\.com/i.test(url) || /amazonaws\.com/i.test(url)) {
         url = 'https://' + url;
       } else {
-        // si es relativo no lo tocamos (retornamos vacío para usar placeholder)
         return "";
       }
     }
 
-    // Reparar casos donde falta slash entre domain and path:
-    // ejemplo: https://vending-app-products.s3.us-east-2.amazonaws.comproductos/...
-    // detectar ".com" seguido de letra sin slash y poner "/"
     url = url.replace(/(\.amazonaws\.com)(?!(\/|:))/i, '$1/');
     url = url.replace(/(\.com)(?!(\/|:))/i, '$1/');
 
-    // Reemplazar sequences de "DEFAULT_PRODUCT_IMAGE_PATH=" que algunas respuestas incluyen
     url = url.replace(/DEFAULT_PRODUCT_IMAGE_PATH=/g, '');
 
-    // Si aún no parece una URL válida, devolver vacío
     if (!/^https?:\/\//i.test(url)) return "";
     return url;
   }
 
-  // Construye URL para pedir recursos vía proxy.php (mismo origen)
   function proxyUrlFor(resourceUrl) {
     if (!resourceUrl) return "";
     return `${PROXY_PHP}${encodeURIComponent(resourceUrl)}`;
   }
 
   // ---------- API: obtener todos los productos desde la máquina ----------
-  // Usamos proxy.php?url=... para evitar problemas CORS con el dominio remoto
   async function fetchStockMachineAll(machineId) {
     try {
       const apiUrl = `${STOCK_API_BASE}/getStockMachine?idMachine=${encodeURIComponent(machineId)}`;
@@ -156,7 +140,6 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error("HTTP " + resp.status + " desde proxy para stockmachine");
       }
       const raw = await resp.json();
-      // estructura esperada: { data: [ { machine: {...}, stock: [ ... ] } ] }
       return raw;
     } catch (err) {
       console.error("Error fetchStockMachineAll:", err);
@@ -165,9 +148,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Obtener stock por producto (si API soporta getStockMachine?idProduct=... se puede añadir)
-  // Pero la API que vimos devuelve todo el stock en una sola llamada; este helper permite fallback.
   async function fetchStockForProduct(productId) {
-    // si ya cacheado, devolver
+
     if (typeof stockByProduct[productId] !== "undefined") return stockByProduct[productId];
 
     if (!MACHINE_ID) {
@@ -208,6 +190,60 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Error fetchStockForProduct:", err);
       stockByProduct[productId] = 0;
       return 0;
+    }
+  }
+
+  // ---------- Cargar publicidad dinámicamente ----------
+  async function cargarPublicidad() {
+    if (!MACHINE_ID) return;
+
+    try {
+      const url = `https://valentin.jbcomputers.com.gt/api/v1/publicidad/byMaquina/${MACHINE_ID}`;
+      const urlProxy = `${PROXY_PHP}${encodeURIComponent(url)}`;
+
+      const resp = await fetch(urlProxy);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+      const data = await resp.json();
+      const lista = data.data || [];
+
+      if (!lista.length) {
+        console.warn("No hay publicidad para esta máquina");
+        return;
+      }
+
+      // Obtener carrusel
+      const carouselInner = document.querySelector("#carouselEjemplo .carousel-inner");
+      const carouselIndicators = document.querySelector("#carouselEjemplo .carousel-indicators");
+
+      if (!carouselInner || !carouselIndicators) return;
+
+      // Limpiar carrusel
+      carouselInner.innerHTML = "";
+      carouselIndicators.innerHTML = "";
+
+      lista.forEach((item, index) => {
+        const pub = item.publicidad;
+        const imagenUrl = fixImageUrl(pub.imageUrl);
+        const finalUrl = imagenUrl ? proxyUrlFor(imagenUrl) : "";
+
+        // Indicador
+        const indicator = document.createElement("button");
+        indicator.type = "button";
+        indicator.dataset.bsTarget = "#carouselEjemplo";
+        indicator.dataset.bsSlideTo = index;
+        if (index === 0) indicator.classList.add("active");
+        carouselIndicators.appendChild(indicator);
+
+        // Slide
+        const slide = document.createElement("div");
+        slide.className = "carousel-item" + (index === 0 ? " active" : "");
+        slide.innerHTML = `<img src="${finalUrl}" class="d-block w-100" alt="${pub.titulo}">`;
+        carouselInner.appendChild(slide);
+      });
+
+    } catch (err) {
+      console.error("Error cargando publicidad:", err);
     }
   }
 
@@ -392,6 +428,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // badge stock
       const stockBadge = document.createElement("div");
+      stockBadge.className = "stock-badge";
       stockBadge.style.position = "absolute";
       stockBadge.style.left = "12px";
       stockBadge.style.top = "12px";
@@ -400,7 +437,7 @@ document.addEventListener("DOMContentLoaded", () => {
       stockBadge.style.padding = "4px 8px";
       stockBadge.style.borderRadius = "12px";
       stockBadge.style.fontSize = "12px";
-      stockBadge.textContent = typeof producto.machineStock !== "undefined" ? `Stock: ${producto.machineStock}` : "";
+      stockBadge.textContent = `Stock: ${producto.machineStock}`;
       if (typeof producto.machineStock !== "undefined") wrapper.appendChild(stockBadge);
 
       const cardBody = document.createElement("div");
@@ -556,6 +593,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // intentar seguir: se detiene la carga de productos desde máquina
     } else {
       console.log("MACHINE_ID cargado:", MACHINE_ID);
+      await cargarPublicidad();
       await cargarProductosDesdeMaquina();
     }
   })();
@@ -567,43 +605,50 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ---------- Actualizar totales ----------
-function actualizarTotales() {
-  total = carrito.reduce((acc, it) => acc + (Number(it.precio) || 0), 0);
-  txtContador.textContent = String(carrito.length);
-  txtTotal.textContent = `Q${total.toFixed(2)}`;
-}
+  function actualizarTotales() {
+    total = carrito.reduce((acc, it) => acc + (Number(it.precio) || 0), 0);
+    txtContador.textContent = String(carrito.length);
+    txtTotal.textContent = `Q${total.toFixed(2)}`;
+  }
 
   // ---------- Agregar producto al carrito (con control de stock) ----------
-async function agregarProducto(productoCompleto, cantidad = 1) {
+  async function agregarProducto(productoCompleto, cantidad = 1) {
     if (!productoCompleto) return;
     const pid = productoCompleto.id ?? productoCompleto._id;
 
-    // Obtener stock actualizado
     const stock = await fetchStockForProduct(pid);
     productoCompleto.machineStock = stock;
 
-    // Cuántos de este producto ya están en el carrito (como ítems separados)
     const agregados = carrito.filter(p => String(p.id) === String(pid)).length;
 
     if (stock - agregados <= 0) {
-        mostrarModalNoDisponible(productoCompleto.nombre || "Producto");
-        return;
+      mostrarModalNoDisponible(productoCompleto.nombre || "Producto");
+      return;
     }
 
-    // Agregar N items individuales
     for (let i = 0; i < cantidad; i++) {
-        carrito.push({
-            id: pid,
-            nombre: productoCompleto.nombre,
-            precio: Number(productoCompleto.precio || 0),
-            imagen: productoCompleto.imageUrl ? proxyUrlFor(productoCompleto.imageUrl) : "",
-            productoCompleto
-        });
+      carrito.push({
+        id: pid,
+        nombre: productoCompleto.nombre,
+        precio: Number(productoCompleto.precio || 0),
+        imagen: productoCompleto.imageUrl ? proxyUrlFor(productoCompleto.imageUrl) : "",
+        productoCompleto
+      });
     }
 
     actualizarTotales();
     mostrarPopup();
-}
+
+    const cards = document.querySelectorAll(`[data-product-id="${pid}"]`);
+    cards.forEach(card => {
+      const badge = card.querySelector(".stock-badge");
+      if (badge) {
+        const nuevoStock = stockByProduct[pid] - carrito.filter(p => p.id === pid).length;
+        badge.textContent = `Stock: ${nuevoStock}`;
+      }
+    });
+  }
+
 
   // ---------- Listeners modal detalle (añadir / cerrar) ----------
   if (btnCerrarModal) {
@@ -621,20 +666,20 @@ async function agregarProducto(productoCompleto, cantidad = 1) {
   }
 
   // ---------- Renderizar carrito ----------
-function renderizarCarrito() {
+  function renderizarCarrito() {
     listaCarrito.innerHTML = "";
 
     if (carrito.length === 0) {
-        listaCarrito.innerHTML = "<p class='text-center text-muted'>No hay productos en el carrito.</p>";
-        totalCarritoModal.textContent = "Q0.00";
-        return;
+      listaCarrito.innerHTML = "<p class='text-center text-muted'>No hay productos en el carrito.</p>";
+      totalCarritoModal.textContent = "Q0.00";
+      return;
     }
 
     carrito.forEach((prod, index) => {
-        const item = document.createElement("div");
-        item.classList.add("item-carrito");
+      const item = document.createElement("div");
+      item.classList.add("item-carrito");
 
-        item.innerHTML = `
+      item.innerHTML = `
             <div class="item-info">
                 <img src="${prod.imagen || ''}">
                 <div class="item-textos">
@@ -648,11 +693,11 @@ function renderizarCarrito() {
             </button>
         `;
 
-        listaCarrito.appendChild(item);
+      listaCarrito.appendChild(item);
     });
 
     totalCarritoModal.textContent = `Q${total.toFixed(2)}`;
-}
+  }
 
 
   // ---------- Abrir carrito ----------
@@ -670,17 +715,17 @@ function renderizarCarrito() {
   }
 
   // ---------- Manejo clicks dentro de listaCarrito (eliminar, inc, dec) ----------
-listaCarrito.addEventListener("click", (e) => {
+  listaCarrito.addEventListener("click", (e) => {
     const btnEliminar = e.target.closest(".btn-eliminar");
     if (btnEliminar) {
-        const index = Number(btnEliminar.dataset.index);
-        if (!isNaN(index)) {
-            carrito.splice(index, 1);
-            actualizarTotales();
-            renderizarCarrito();
-        }
+      const index = Number(btnEliminar.dataset.index);
+      if (!isNaN(index)) {
+        carrito.splice(index, 1);
+        actualizarTotales();
+        renderizarCarrito();
+      }
     }
-});
+  });
 
   // ---------- Render pago ----------
   function renderizarPago() {
@@ -733,7 +778,6 @@ listaCarrito.addEventListener("click", (e) => {
   const cerrarQR = document.getElementById("cerrarQR");
   if (cerrarQR) cerrarQR.addEventListener("click", () => modalQR.classList.remove("mostrar"));
 
-  // botones que muestran POS (lista incluye #continuarPagoCarrito en tu HTML)
   document.querySelectorAll("#continuarPagoCarrito, #modalCarrito .btn-pago-qr").forEach(btn => {
     btn.addEventListener("click", () => {
       if (!validarCarritoNoVacio()) return;
@@ -747,63 +791,86 @@ listaCarrito.addEventListener("click", (e) => {
   async function confirmarVenta(metodoPago) {
     if (!validarCarritoNoVacio()) return;
 
-    // preparar detalles
-    const detalles = carrito.map(it => ({ idProducto: Number(it.id), cantidad: Number(it.cantidad) }));
+    // Construir cantidades REALES por producto
+    const mapaCantidades = {};
+
+    carrito.forEach(item => {
+        const pid = Number(item.id);
+        if (!mapaCantidades[pid]) mapaCantidades[pid] = 0;
+        mapaCantidades[pid]++;   // cada item cuenta como 1
+    });
+
+    // Convertir a arreglo para enviarlo al backend
+    const detalles = Object.entries(mapaCantidades).map(([idProducto, cantidad]) => ({
+        idProducto: Number(idProducto),
+        cantidad: Number(cantidad)
+    }));
+
     const payload = {
-      idMaquina: MACHINE_ID,
-      metodoPago,
-      detalles
+        idMaquina: MACHINE_ID,
+        metodoPago,
+        detalles
     };
 
-    // Intentar enviar al proxy ventas (si existe) o mostrar banner si no
-    const ventasEndpointProxy = `${API_PROXY}ventas`; // solo útil si tu api.php soporta esa ruta
+    // Intentar enviar al API (proxy local → API remota)
+    const ventasEndpointProxy = `${API_PROXY}ventas`;
+
     try {
-      let resp = await fetch(ventasEndpointProxy, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      // si proxy 404 o falla intentar ruta remota alternativa (no garantizada por CORS),
-      // preferimos usar proxy.php para una URL remota completa si tu backend no tiene api.php route.
-      if (!resp.ok) {
-        // construir llamado remoto completo (ejemplo) y usar proxy.php para evitar CORS
-        const remoteVentaUrl = `https://valentin.jbcomputers.com.gt/api/v1/ventas`;
-        const proxyUrl = `${PROXY_PHP}${encodeURIComponent(remoteVentaUrl)}`;
-        resp = await fetch(proxyUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+        let resp = await fetch(ventasEndpointProxy, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
         });
-      }
 
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error("Error al registrar venta: " + resp.status + " " + txt);
-      }
+        // Si falla, intentar ruta remota usando proxy.php (evita CORS)
+        if (!resp.ok) {
+            const remoteVentaUrl = `https://valentin.jbcomputers.com.gt/api/v1/ventas`;
+            const proxyUrl = `${PROXY_PHP}${encodeURIComponent(remoteVentaUrl)}`;
 
-      // éxito: actualizar stock local
-      for (const it of carrito) {
-        const currentStock = (typeof stockByProduct[it.id] === "number") ? stockByProduct[it.id] : (it.productoCompleto?.machineStock ?? 0);
-        const newStock = Math.max(0, currentStock - it.cantidad);
-        stockByProduct[it.id] = newStock;
-        const prodInApi = productosAPI.find(p => String(p.id) === String(it.id));
-        if (prodInApi) prodInApi.machineStock = newStock;
-      }
+            resp = await fetch(proxyUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+        }
 
-      carrito = [];
-      actualizarTotales();
-      cerrarTodosLosModales();
-      showSuccessAfterPayment(metodoPago);
+        if (!resp.ok) {
+            const txt = await resp.text().catch(() => "");
+            throw new Error("Error al registrar venta: " + resp.status + " " + txt);
+        }
 
-      // volver a renderizar cards para actualizar badges de stock
-      rellenarCards();
+        // ================================
+        //   RESTAR STOCK TRAS LA VENTA
+        // ================================
+        for (const [idProducto, cantidad] of Object.entries(mapaCantidades)) {
+            const pid = Number(idProducto);
+            const cant = Number(cantidad);
+
+            const currentStock = stockByProduct[pid] ?? 0;
+            const newStock = Math.max(0, currentStock - cant);
+
+            // actualizar caches
+            stockByProduct[pid] = newStock;
+
+            // actualizar en productosAPI
+            const prodInApi = productosAPI.find(p => String(p.id) === String(pid));
+            if (prodInApi) prodInApi.machineStock = newStock;
+        }
+
+        // ================================
+        //    LIMPIAR Y ACTUALIZAR UI
+        // ================================
+        carrito = [];
+        actualizarTotales();
+        cerrarTodosLosModales();
+        showSuccessAfterPayment(metodoPago);
+        rellenarCards(); // refresca badges de stock
 
     } catch (err) {
-      console.error("Error confirmarVenta:", err);
-      showErrorBanner("No se pudo completar la venta: " + (err.message || err));
+        console.error("Error confirmarVenta:", err);
+        showErrorBanner("No se pudo completar la venta: " + (err.message || err));
     }
-  }
+}
 
   // ---------- Hooks botones pagar en modalPago ----------
   if (btnPagarTarjeta) {
@@ -840,7 +907,7 @@ listaCarrito.addEventListener("click", (e) => {
       modalQR.classList.add("mostrar");
       setTimeout(async () => {
         modalQR.classList.remove("mostrar");
-        await confirmarVenta("QR");
+        await confirmarVenta("EFECTIVO");
       }, 700);
     });
   }
